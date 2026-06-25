@@ -1,0 +1,14 @@
+# Secrets et états Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+
+# Variables sensibles
+secrets.yml
+*.key
+*.pem
+
+# Divers
+.DS_Store
