@@ -12,3 +12,4 @@ secrets.yml
 
 # Divers
 .DS_Store
+ansible/inventory.ini
