@@ -14,3 +14,9 @@ variable "target_node" {
   type        = string
   default     = "proxmox1"
 }
+
+variable "ct_password" {
+  description = "Mot de passe root des conteneurs LXC"
+  type        = string
+  sensitive   = true
+}

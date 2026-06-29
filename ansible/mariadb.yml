@@ -1,0 +1,74 @@
+---
+- name: Deploiement MariaDB avec restauration des donnees (zone APP)
+  hosts: mariadb
+  become: true
+
+  vars:
+    root_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.root_password }}"
+    nc_user: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_user }}"
+    nc_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_password }}"
+    nc_db: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_db }}"
+    nc_host: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_host }}"
+
+  tasks:
+    - name: Installer MariaDB
+      apt:
+        name: [mariadb-server, python3-pymysql]
+        state: present
+        update_cache: yes
+
+    - name: Demarrer et activer MariaDB
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Definir le mot de passe root
+      mysql_user:
+        name: root
+        password: "{{ root_pw }}"
+        login_unix_socket: /run/mysqld/mysqld.sock
+        check_implicit_admin: yes
+
+    - name: Creer la base nextcloud
+      mysql_db:
+        name: "{{ nc_db }}"
+        state: present
+        login_user: root
+        login_password: "{{ root_pw }}"
+
+    - name: Copier le dump SQL vers le conteneur
+      copy:
+        src: nextcloud-dump.sql
+        dest: /tmp/nextcloud-dump.sql
+
+    - name: Importer les donnees dans la base nextcloud
+      mysql_db:
+        name: "{{ nc_db }}"
+        state: import
+        target: /tmp/nextcloud-dump.sql
+        login_user: root
+        login_password: "{{ root_pw }}"
+
+    - name: Creer l'utilisateur nextcloud (restreint a son IP)
+      mysql_user:
+        name: "{{ nc_user }}"
+        password: "{{ nc_pw }}"
+        host: "{{ nc_host }}"
+        priv: "{{ nc_db }}.*:ALL"
+        state: present
+        login_user: root
+        login_password: "{{ root_pw }}"
+
+    - name: Ecouter sur le reseau (bind-address)
+      lineinfile:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+      notify: restart mariadb
+
+  handlers:
+    - name: restart mariadb
+      service:
+        name: mariadb
+        state: restarted
