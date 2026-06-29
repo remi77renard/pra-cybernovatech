@@ -1,0 +1,78 @@
+---
+- name: Deploiement Wazuh SIEM (Docker, zone Admin)
+  hosts: wazuh
+  become: true
+
+  vars:
+    indexer_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'wazuh', engine_mount_point='secret').secret.indexer_password }}"
+    api_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'wazuh', engine_mount_point='secret').secret.api_password }}"
+    dashboard_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'wazuh', engine_mount_point='secret').secret.dashboard_password }}"
+
+  tasks:
+    - name: Regler vm.max_map_count (requis pour l'indexer)
+      sysctl:
+        name: vm.max_map_count
+        value: '262144'
+        state: present
+        reload: yes
+
+    - name: Installer les dependances
+      apt:
+        name: [ca-certificates, curl, gnupg, git]
+        state: present
+        update_cache: yes
+
+    - name: Ajouter la cle GPG Docker
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Ajouter le depot Docker
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Installer Docker
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: present
+        update_cache: yes
+
+    - name: Cloner wazuh-docker v4.9.0
+      git:
+        repo: https://github.com/wazuh/wazuh-docker.git
+        dest: /opt/wazuh-docker
+        version: v4.9.0
+
+    - name: Injecter le mot de passe indexer depuis Vault
+      replace:
+        path: /opt/wazuh-docker/single-node/docker-compose.yml
+        regexp: 'INDEXER_PASSWORD=.*'
+        replace: 'INDEXER_PASSWORD={{ indexer_pw }}'
+
+    - name: Injecter le mot de passe API depuis Vault
+      replace:
+        path: /opt/wazuh-docker/single-node/docker-compose.yml
+        regexp: 'API_PASSWORD=.*'
+        replace: 'API_PASSWORD={{ api_pw }}'
+
+    - name: Corriger les ulimits (incompatibles LXC non-privilegie)
+      shell: |
+        sed -i 's/soft: -1/soft: 65536/g; s/hard: -1/hard: 65536/g; s/soft: 655360/soft: 65536/g; s/hard: 655360/hard: 65536/g' /opt/wazuh-docker/single-node/docker-compose.yml
+
+    - name: Augmenter le heap de l'indexer (eviter le GC excessif)
+      shell: sed -i 's/-Xms1g -Xmx1g/-Xms2g -Xmx2g/' /opt/wazuh-docker/single-node/docker-compose.yml
+
+    - name: Generer les certificats
+      shell: docker compose -f generate-indexer-certs.yml run --rm generator
+      args:
+        chdir: /opt/wazuh-docker/single-node
+
+    - name: Lancer la stack Wazuh
+      shell: docker compose up -d
+      args:
+        chdir: /opt/wazuh-docker/single-node
