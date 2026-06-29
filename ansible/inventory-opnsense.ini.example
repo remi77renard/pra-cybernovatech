@@ -1,0 +1,8 @@
+[opnsense]
+opnsense-clone ansible_host=192.168.1.199
+
+[opnsense:vars]
+ansible_user=root
+ansible_password=CHANGEME
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+ansible_python_interpreter=/usr/local/bin/python3

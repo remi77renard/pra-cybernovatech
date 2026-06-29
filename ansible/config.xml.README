@@ -1,0 +1,13 @@
+# Configuration OPNsense
+
+Le fichier `config.xml` n'est PAS versionné car il contient des informations
+sensibles : plan d'adressage, regles de pare-feu, cles WireGuard, comptes.
+
+## Pour deployer :
+1. Exporter la config depuis une OPNsense fonctionnelle :
+   Systeme > Configuration > Sauvegardes > Telecharger
+2. Placer le fichier exporte ici, nomme `config.xml`
+3. Lancer le deploiement : ./deploy-opnsense.sh
+
+Le playbook inject-opnsense.yml poussera ce fichier vers /conf/config.xml
+du clone OPNsense, restaurant la configuration complete.

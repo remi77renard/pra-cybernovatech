@@ -13,3 +13,7 @@ secrets.yml
 # Divers
 .DS_Store
 ansible/inventory.ini
+
+# Config OPNsense - contient IP, regles firewall, secrets (NE PAS exposer)
+ansible/config.xml
+ansible/inventory-opnsense.ini

@@ -1,0 +1,22 @@
+---
+- name: Injection de la configuration OPNsense
+  hosts: opnsense
+  gather_facts: no
+
+  tasks:
+    - name: Sauvegarder la config actuelle (sécurité)
+      raw: cp /conf/config.xml /conf/config.xml.bak
+
+    - name: Copier le nouveau config.xml
+      ansible.builtin.copy:
+        src: config.xml
+        dest: /conf/config.xml
+        owner: root
+        group: wheel
+        mode: '0644'
+
+    - name: Redémarrer OPNsense pour appliquer la config
+      raw: /sbin/reboot
+      async: 1
+      poll: 0
+      ignore_errors: yes
