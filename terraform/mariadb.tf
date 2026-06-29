@@ -7,7 +7,6 @@ resource "proxmox_lxc" "mariadb" {
   password     = var.ct_password
   unprivileged = true
   onboot       = true
-  start        = true
 
   cores  = 1
   memory = 1024

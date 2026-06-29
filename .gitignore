@@ -19,3 +19,4 @@ ansible/config.xml
 ansible/inventory-opnsense.ini
 ansible/nextcloud-dump.sql
 ansible/*.sql
+.env

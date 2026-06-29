@@ -1,5 +1,5 @@
 ---
-- name: Deploiement MariaDB avec restauration des donnees (zone APP)
+- name: Deploiement MariaDB avec restauration et agents (zone APP)
   hosts: mariadb
   become: true
 
@@ -9,6 +9,8 @@
     nc_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_password }}"
     nc_db: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_db }}"
     nc_host: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_host }}"
+    wazuh_manager: "192.168.20.220"
+    zabbix_server: "192.168.20.200"
 
   tasks:
     - name: Installer MariaDB
@@ -27,8 +29,11 @@
       mysql_user:
         name: root
         password: "{{ root_pw }}"
+        login_user: root
+        login_password: "{{ root_pw }}"
         login_unix_socket: /run/mysqld/mysqld.sock
         check_implicit_admin: yes
+      ignore_errors: yes
 
     - name: Creer la base nextcloud
       mysql_db:
@@ -67,8 +72,82 @@
         line: 'bind-address = 0.0.0.0'
       notify: restart mariadb
 
+    # ===== AGENT WAZUH (SIEM) =====
+    - name: Telecharger l'agent Wazuh
+      get_url:
+        url: https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb
+        dest: /tmp/wazuh-agent.deb
+
+    - name: Installer l'agent Wazuh
+      apt:
+        deb: /tmp/wazuh-agent.deb
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"
+        WAZUH_AGENT_NAME: "mariadb"
+
+    - name: Activer et demarrer l'agent Wazuh
+      systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    # ===== AGENT ZABBIX (Supervision) =====
+    - name: Installer gnupg (necessaire pour la cle Zabbix)
+      apt:
+        name: gnupg
+        state: present
+
+    - name: Telecharger la cle GPG Zabbix
+      get_url:
+        url: https://repo.zabbix.com/zabbix-official-repo.key
+        dest: /tmp/zabbix.key
+
+    - name: Installer la cle GPG Zabbix
+      shell: gpg --dearmor < /tmp/zabbix.key > /usr/share/keyrings/zabbix.gpg
+
+    - name: Ajouter le depot Zabbix 7.0
+      copy:
+        dest: /etc/apt/sources.list.d/zabbix.sources
+        content: |
+          Types: deb
+          URIs: http://repo.zabbix.com/zabbix/7.0/ubuntu
+          Suites: noble
+          Components: main
+          Signed-By: /usr/share/keyrings/zabbix.gpg
+
+    - name: Installer l'agent Zabbix 2
+      apt:
+        name: zabbix-agent2
+        state: present
+        update_cache: yes
+
+    - name: Configurer le serveur Zabbix
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Server='
+        line: 'Server=127.0.0.1,{{ zabbix_server }}'
+
+    - name: Configurer le serveur actif Zabbix
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^ServerActive='
+        line: 'ServerActive={{ zabbix_server }}'
+
+    - name: Configurer le hostname Zabbix
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Hostname='
+        line: 'Hostname=mariadb'
+      notify: restart zabbix
+
   handlers:
     - name: restart mariadb
       service:
         name: mariadb
         state: restarted
+    - name: restart zabbix
+      service:
+        name: zabbix-agent2
+        state: restarted
+        enabled: yes
