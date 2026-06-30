@@ -20,3 +20,5 @@ ansible/inventory-opnsense.ini
 ansible/nextcloud-dump.sql
 ansible/*.sql
 .env
+ansible/nextcloud-config.php
+ansible/nextcloud-data.tar.gz

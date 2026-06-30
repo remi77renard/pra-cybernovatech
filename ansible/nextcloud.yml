@@ -1,0 +1,189 @@
+---
+- name: Deploiement Nextcloud (Docker, zone DMZ)
+  hosts: nextcloud
+  become: true
+
+  vars:
+    nc_db: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_db }}"
+    nc_user: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_user }}"
+    nc_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'mariadb', engine_mount_point='secret').secret.nextcloud_password }}"
+    nc_host: "192.168.30.200"
+    wazuh_manager: "192.168.20.220"
+    zabbix_server: "192.168.20.200"
+
+  tasks:
+    - name: Installer les dependances
+      apt:
+        name: [ca-certificates, curl, gnupg, git]
+        state: present
+        update_cache: yes
+
+    - name: Ajouter la cle GPG Docker
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Ajouter le depot Docker
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Installer Docker
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: present
+        update_cache: yes
+
+    - name: Creer le repertoire Nextcloud
+      file:
+        path: /opt/nextcloud
+        state: directory
+
+    - name: Deployer le docker-compose Nextcloud (secret depuis Vault)
+      copy:
+        dest: /opt/nextcloud/docker-compose.yml
+        content: |
+          services:
+            app:
+              image: nextcloud:latest
+              container_name: nextcloud-app
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              dns:
+                - 1.1.1.1
+                - 192.168.1.1
+              ports:
+                - "80:80"
+              volumes:
+                - nextcloud_data:/var/www/html
+              environment:
+                - MYSQL_HOST={{ nc_host }}
+                - MYSQL_DATABASE={{ nc_db }}
+                - MYSQL_USER={{ nc_user }}
+                - MYSQL_PASSWORD={{ nc_pw }}
+                - NEXTCLOUD_TRUSTED_DOMAINS=192.168.10.200
+          volumes:
+            nextcloud_data:
+
+    - name: Lancer Nextcloud (premier demarrage pour creer le volume)
+      shell: docker compose up -d
+      args:
+        chdir: /opt/nextcloud
+
+    - name: Attendre l'initialisation du volume Nextcloud
+      wait_for:
+        path: /var/lib/docker/volumes/nextcloud_nextcloud_data/_data/config
+        timeout: 120
+
+    - name: Injecter le config.php existant (reconnexion aux donnees)
+      copy:
+        src: nextcloud-config.php
+        dest: /var/lib/docker/volumes/nextcloud_nextcloud_data/_data/config/config.php
+        owner: '33'
+        group: '33'
+        mode: '0640'
+
+    - name: Copier l'archive des donnees Nextcloud
+      copy:
+        src: nextcloud-data.tar.gz
+        dest: /tmp/nextcloud-data.tar.gz
+
+    - name: Restaurer les donnees utilisateur dans le volume
+      shell: tar xzf /tmp/nextcloud-data.tar.gz -C /var/lib/docker/volumes/nextcloud_nextcloud_data/_data/
+
+    - name: Creer le marqueur .ncdata
+      copy:
+        dest: /var/lib/docker/volumes/nextcloud_nextcloud_data/_data/data/.ncdata
+        content: "# Nextcloud data directory\n"
+
+    - name: Corriger les permissions des donnees
+      shell: docker exec nextcloud-app chown -R www-data:www-data /var/www/html/data
+
+    - name: Redemarrer Nextcloud pour prendre en compte le config.php
+      shell: docker compose restart
+      args:
+        chdir: /opt/nextcloud
+
+    - name: Scanner les fichiers pour resynchroniser la base
+      shell: docker exec -u www-data nextcloud-app php occ files:scan --all
+
+    # ===== AGENT WAZUH =====
+    - name: Telecharger l'agent Wazuh
+      get_url:
+        url: https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb
+        dest: /tmp/wazuh-agent.deb
+
+    - name: Installer l'agent Wazuh
+      apt:
+        deb: /tmp/wazuh-agent.deb
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"
+        WAZUH_AGENT_NAME: "nextcloud"
+
+    - name: Activer et demarrer l'agent Wazuh
+      systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    # ===== AGENT ZABBIX =====
+    - name: Installer gnupg
+      apt:
+        name: gnupg
+        state: present
+
+    - name: Telecharger la cle GPG Zabbix
+      get_url:
+        url: https://repo.zabbix.com/zabbix-official-repo.key
+        dest: /tmp/zabbix.key
+
+    - name: Installer la cle GPG Zabbix
+      shell: gpg --dearmor < /tmp/zabbix.key > /usr/share/keyrings/zabbix.gpg
+
+    - name: Ajouter le depot Zabbix 7.0
+      copy:
+        dest: /etc/apt/sources.list.d/zabbix.sources
+        content: |
+          Types: deb
+          URIs: http://repo.zabbix.com/zabbix/7.0/ubuntu
+          Suites: noble
+          Components: main
+          Signed-By: /usr/share/keyrings/zabbix.gpg
+
+    - name: Installer l'agent Zabbix 2
+      apt:
+        name: zabbix-agent2
+        state: present
+        update_cache: yes
+
+    - name: Configurer Zabbix (Server)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Server='
+        line: 'Server=127.0.0.1,{{ zabbix_server }}'
+
+    - name: Configurer Zabbix (ServerActive)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^ServerActive='
+        line: 'ServerActive={{ zabbix_server }}'
+
+    - name: Configurer Zabbix (Hostname)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Hostname='
+        line: 'Hostname=nextcloud'
+      notify: restart zabbix
+
+  handlers:
+    - name: restart zabbix
+      service:
+        name: zabbix-agent2
+        state: restarted
+        enabled: yes
