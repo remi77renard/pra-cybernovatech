@@ -1,0 +1,105 @@
+---
+- name: Deploiement HashiCorp Vault (LXC dedie, zone Admin)
+  hosts: vault
+  become: true
+
+  tasks:
+    - name: Installer les dependances
+      apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: yes
+
+    - name: Ajouter la cle GPG Docker
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Ajouter le depot Docker
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Installer Docker
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: present
+        update_cache: yes
+
+    - name: Creer les repertoires Vault
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - /opt/vault
+        - /opt/vault/vault-config
+
+    - name: Deployer la configuration Vault (vault.hcl)
+      copy:
+        dest: /opt/vault/vault-config/vault.hcl
+        content: |
+          ui = true
+          storage "file" {
+            path = "/vault/data"
+          }
+          listener "tcp" {
+            address     = "0.0.0.0:8200"
+            tls_disable = 1
+          }
+          disable_mlock = true
+
+    - name: Deployer le docker-compose Vault
+      copy:
+        dest: /opt/vault/docker-compose.yml
+        content: |
+          services:
+            vault:
+              image: hashicorp/vault:latest
+              container_name: vault
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              ports:
+                - "8200:8200"
+              cap_add:
+                - IPC_LOCK
+              environment:
+                - VAULT_ADDR=http://0.0.0.0:8200
+              volumes:
+                - vault_data:/vault/data
+                - ./vault-config:/vault/config
+              command: server
+          volumes:
+            vault_data:
+
+    - name: Lancer Vault (premier demarrage pour creer le volume)
+      shell: docker compose up -d
+      args:
+        chdir: /opt/vault
+
+    - name: Attendre la creation du volume
+      wait_for:
+        path: /var/lib/docker/volumes/vault_vault_data/_data
+        timeout: 60
+
+    - name: Arreter Vault avant restauration des donnees
+      shell: docker compose down
+      args:
+        chdir: /opt/vault
+
+    - name: Copier l'archive des donnees Vault
+      copy:
+        src: vault-data.tar.gz
+        dest: /tmp/vault-data.tar.gz
+
+    - name: Restaurer les donnees Vault dans le volume
+      shell: tar xzf /tmp/vault-data.tar.gz -C /var/lib/docker/volumes/vault_vault_data/_data/
+
+    - name: Redemarrer Vault avec les donnees restaurees
+      shell: docker compose up -d
+      args:
+        chdir: /opt/vault
