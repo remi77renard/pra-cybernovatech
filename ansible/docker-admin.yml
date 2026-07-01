@@ -229,6 +229,31 @@
         line: 'Hostname=docker-admin'
       notify: restart zabbix
 
+
+    # ===== SYNC DES LOGS VERS LE SITE SECONDAIRE (P2) =====
+    - name: Deployer la cle SSH dediee au sync des logs
+      copy:
+        src: log-sync-key
+        dest: /root/.ssh/log-sync-key
+        mode: '0600'
+
+    - name: Deployer le script de sync des logs Zabbix
+      copy:
+        dest: /root/sync_zabbix_logs.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          mkdir -p /tmp/zabbix_logs
+          docker logs zabbix-server > /tmp/zabbix_logs/zabbix-server.log 2>&1
+          rsync -az --delete -e "ssh -i /root/.ssh/log-sync-key -o StrictHostKeyChecking=no" \
+            /tmp/zabbix_logs/ root@192.168.1.220:/srv/logs/zabbix/
+
+    - name: Installer le cron de sync des logs Zabbix
+      cron:
+        name: "sync zabbix logs vers P2"
+        minute: "*"
+        job: "/root/sync_zabbix_logs.sh >/dev/null 2>&1"
+
   handlers:
     - name: restart zabbix
       service:

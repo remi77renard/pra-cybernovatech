@@ -76,3 +76,26 @@
       shell: docker compose up -d
       args:
         chdir: /opt/wazuh-docker/single-node
+
+    # ===== SYNC DES LOGS VERS LE SITE SECONDAIRE (P2) =====
+    - name: Deployer la cle SSH dediee au sync des logs
+      copy:
+        src: log-sync-key
+        dest: /root/.ssh/log-sync-key
+        mode: '0600'
+
+    - name: Deployer le script de sync des logs Wazuh
+      copy:
+        dest: /root/sync_wazuh_logs.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          rsync -az --delete -e "ssh -i /root/.ssh/log-sync-key -o StrictHostKeyChecking=no" \
+            /var/lib/docker/volumes/single-node_wazuh_logs/_data/ \
+            root@192.168.1.220:/srv/logs/wazuh/
+
+    - name: Installer le cron de sync des logs Wazuh
+      cron:
+        name: "sync wazuh logs vers P2"
+        minute: "*"
+        job: "/root/sync_wazuh_logs.sh >/dev/null 2>&1"
