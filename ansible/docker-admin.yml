@@ -1,0 +1,237 @@
+---
+- name: Deploiement docker-admin (Zabbix + Portainer + Dashy)
+  hosts: docker-admin
+  become: true
+
+  vars:
+    zbx_root_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'zabbix', engine_mount_point='secret').secret.db_root_password }}"
+    zbx_pw: "{{ lookup('community.hashi_vault.vault_kv2_get', 'zabbix', engine_mount_point='secret').secret.db_password }}"
+    zbx_user: "{{ lookup('community.hashi_vault.vault_kv2_get', 'zabbix', engine_mount_point='secret').secret.db_user }}"
+    zbx_db: "{{ lookup('community.hashi_vault.vault_kv2_get', 'zabbix', engine_mount_point='secret').secret.db_name }}"
+    wazuh_manager: "192.168.20.220"
+    zabbix_server: "127.0.0.1"
+
+  tasks:
+    - name: Installer les dependances
+      apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: yes
+
+    - name: Ajouter la cle GPG Docker
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Ajouter le depot Docker
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Installer Docker
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: present
+        update_cache: yes
+
+    - name: Creer les repertoires
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - /opt/stack
+        - /opt/stack/dashy-data
+
+    - name: Deployer le docker-compose (secrets depuis Vault, sans Vault dans la stack)
+      copy:
+        dest: /opt/stack/docker-compose.yml
+        content: |
+          services:
+            portainer:
+              image: portainer/portainer-ce:latest
+              container_name: portainer
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              ports:
+                - "9000:9000"
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+                - portainer_data:/data
+            dashy:
+              image: lissy93/dashy:latest
+              container_name: dashy
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              ports:
+                - "4000:8080"
+              volumes:
+                - ./dashy-data:/app/user-data
+            zabbix-db:
+              image: mariadb:11
+              container_name: zabbix-db
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              environment:
+                - MARIADB_ROOT_PASSWORD={{ zbx_root_pw }}
+                - MYSQL_DATABASE={{ zbx_db }}
+                - MYSQL_USER={{ zbx_user }}
+                - MYSQL_PASSWORD={{ zbx_pw }}
+              volumes:
+                - zabbix_db:/var/lib/mysql
+              command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin
+            zabbix-server:
+              image: zabbix/zabbix-server-mysql:latest
+              container_name: zabbix-server
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              environment:
+                - DB_SERVER_HOST=zabbix-db
+                - MYSQL_DATABASE={{ zbx_db }}
+                - MYSQL_USER={{ zbx_user }}
+                - MYSQL_PASSWORD={{ zbx_pw }}
+                - MYSQL_ROOT_PASSWORD={{ zbx_root_pw }}
+              ports:
+                - "10051:10051"
+              depends_on:
+                - zabbix-db
+            zabbix-web:
+              image: zabbix/zabbix-web-nginx-mysql:latest
+              container_name: zabbix-web
+              security_opt:
+                - apparmor=unconfined
+              restart: unless-stopped
+              environment:
+                - DB_SERVER_HOST=zabbix-db
+                - MYSQL_DATABASE={{ zbx_db }}
+                - MYSQL_USER={{ zbx_user }}
+                - MYSQL_PASSWORD={{ zbx_pw }}
+                - ZBX_SERVER_HOST=zabbix-server
+                - PHP_TZ=Europe/Paris
+              ports:
+                - "8081:8080"
+              depends_on:
+                - zabbix-server
+          volumes:
+            portainer_data:
+            zabbix_db:
+
+    - name: Lancer la stack (premier demarrage pour creer les volumes)
+      shell: docker compose up -d
+      args:
+        chdir: /opt/stack
+
+    - name: Attendre la creation du volume Zabbix DB
+      wait_for:
+        path: /var/lib/docker/volumes/stack_zabbix_db/_data
+        timeout: 60
+
+    - name: Arreter la stack avant restauration
+      shell: docker compose down
+      args:
+        chdir: /opt/stack
+
+    - name: Copier l'archive de la base Zabbix
+      copy:
+        src: zabbix-db.tar.gz
+        dest: /tmp/zabbix-db.tar.gz
+
+    - name: Restaurer la base Zabbix
+      shell: tar xzf /tmp/zabbix-db.tar.gz -C /var/lib/docker/volumes/stack_zabbix_db/_data/
+
+    - name: Copier l'archive Dashy
+      copy:
+        src: dashy.tar.gz
+        dest: /tmp/dashy.tar.gz
+
+    - name: Restaurer Dashy (config + data)
+      shell: tar xzf /tmp/dashy.tar.gz -C /opt/stack/
+
+    - name: Copier l'archive Portainer
+      copy:
+        src: portainer-data.tar.gz
+        dest: /tmp/portainer-data.tar.gz
+
+    - name: Restaurer les donnees Portainer
+      shell: tar xzf /tmp/portainer-data.tar.gz -C /var/lib/docker/volumes/stack_portainer_data/_data/
+
+    - name: Redemarrer la stack avec les donnees restaurees (avec retry reseau)
+      shell: docker compose up -d
+      args:
+        chdir: /opt/stack
+      register: compose_up
+      retries: 3
+      delay: 15
+      until: compose_up.rc == 0
+
+    # ===== AGENT WAZUH =====
+    - name: Telecharger l'agent Wazuh
+      get_url:
+        url: https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb
+        dest: /tmp/wazuh-agent.deb
+
+    - name: Installer l'agent Wazuh
+      apt:
+        deb: /tmp/wazuh-agent.deb
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"
+        WAZUH_AGENT_NAME: "docker-admin"
+
+    - name: Activer et demarrer l'agent Wazuh
+      systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    # ===== AGENT ZABBIX =====
+    - name: Telecharger la cle GPG Zabbix
+      get_url:
+        url: https://repo.zabbix.com/zabbix-official-repo.key
+        dest: /tmp/zabbix.key
+
+    - name: Installer la cle GPG Zabbix
+      shell: gpg --dearmor < /tmp/zabbix.key > /usr/share/keyrings/zabbix.gpg
+
+    - name: Ajouter le depot Zabbix 7.0
+      copy:
+        dest: /etc/apt/sources.list.d/zabbix.sources
+        content: |
+          Types: deb
+          URIs: http://repo.zabbix.com/zabbix/7.0/ubuntu
+          Suites: noble
+          Components: main
+          Signed-By: /usr/share/keyrings/zabbix.gpg
+
+    - name: Installer l'agent Zabbix 2
+      apt:
+        name: zabbix-agent2
+        state: present
+        update_cache: yes
+
+    - name: Configurer Zabbix (Server)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Server='
+        line: 'Server=127.0.0.1'
+
+    - name: Configurer Zabbix (Hostname)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: '^Hostname='
+        line: 'Hostname=docker-admin'
+      notify: restart zabbix
+
+  handlers:
+    - name: restart zabbix
+      service:
+        name: zabbix-agent2
+        state: restarted
+        enabled: yes

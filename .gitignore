@@ -23,3 +23,6 @@ ansible/*.sql
 ansible/nextcloud-config.php
 ansible/nextcloud-data.tar.gz
 ansible/vault-data.tar.gz
+ansible/zabbix-db.tar.gz
+ansible/dashy.tar.gz
+ansible/portainer-data.tar.gz
