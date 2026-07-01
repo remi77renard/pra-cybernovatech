@@ -31,4 +31,8 @@ resource "proxmox_lxc" "nextcloud" {
   }
 
   ssh_public_keys = file("/root/.ssh/id_ed25519.pub")
+
+  lifecycle {
+    ignore_changes = [features]
+  }
 }

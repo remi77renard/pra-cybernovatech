@@ -1,10 +1,14 @@
 #!/bin/bash
 set -e
 
-PROXMOX="root@192.168.1.100"
-VMID="110"
+PROXMOX="root@${PROXMOX_HOST:-192.168.1.100}"
+# Test RTO : si PROXMOX_HOST surcharge, Terraform utilise aussi cette IP
+if [ -n "$PROXMOX_HOST" ]; then
+  export TF_VAR_pm_api_url="https://${PROXMOX_HOST}:8006/api2/json"
+fi
+VMID="100"
 DISK="local-lvm:vm-${VMID}-disk-0"
-WAN_IP="192.168.1.199"
+WAN_IP="192.168.20.253"
 
 echo "========================================="
 echo " DEPLOIEMENT AUTOMATISE OPNSENSE (PRA)"

@@ -16,7 +16,5 @@
         mode: '0644'
 
     - name: Redémarrer OPNsense pour appliquer la config
-      raw: /sbin/reboot
-      async: 1
-      poll: 0
+      raw: (sleep 2 && /sbin/reboot) &
       ignore_errors: yes

@@ -9,7 +9,7 @@ resource "proxmox_lxc" "wazuh" {
   onboot       = true
 
   cores  = 2
-  memory = 6144
+  memory = 8192
   swap   = 6144
 
   rootfs {

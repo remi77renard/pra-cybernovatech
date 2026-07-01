@@ -20,3 +20,8 @@ variable "ct_password" {
   type        = string
   sensitive   = true
 }
+
+variable "pm_api_url" {
+  type    = string
+  default = "https://192.168.1.100:8006/api2/json"
+}

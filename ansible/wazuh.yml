@@ -65,7 +65,7 @@
         sed -i 's/soft: -1/soft: 65536/g; s/hard: -1/hard: 65536/g; s/soft: 655360/soft: 65536/g; s/hard: 655360/hard: 65536/g' /opt/wazuh-docker/single-node/docker-compose.yml
 
     - name: Augmenter le heap de l'indexer (eviter le GC excessif)
-      shell: sed -i 's/-Xms1g -Xmx1g/-Xms2g -Xmx2g/' /opt/wazuh-docker/single-node/docker-compose.yml
+      shell: sed -i 's/-Xms1g -Xmx1g/-Xms3g -Xmx3g/' /opt/wazuh-docker/single-node/docker-compose.yml
 
     - name: Generer les certificats
       shell: docker compose -f generate-indexer-certs.yml run --rm generator
@@ -76,6 +76,16 @@
       shell: docker compose up -d
       args:
         chdir: /opt/wazuh-docker/single-node
+
+    - name: Attendre que l'indexer Wazuh soit operationnel (evite la corruption .kibana)
+      shell: |
+        docker exec single-node-wazuh.indexer-1 curl -k -s -u admin:{{ indexer_pw }} "https://localhost:9200/_cluster/health" | grep -oE '"status":"(green|yellow)"'
+      register: idx_health
+      until: idx_health.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      ignore_errors: yes
 
     # ===== SYNC DES LOGS VERS LE SITE SECONDAIRE (P2) =====
     - name: Deployer la cle SSH dediee au sync des logs

@@ -2,7 +2,7 @@
 resource "proxmox_vm_qemu" "opnsense" {
   name        = "opnsense-iac"
   target_node = var.target_node
-  vmid        = 110
+  vmid        = 100
   clone       = "opnsense-image"
   full_clone  = true
   agent       = 0

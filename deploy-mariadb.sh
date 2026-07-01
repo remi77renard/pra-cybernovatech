@@ -16,12 +16,15 @@ terraform apply -target=proxmox_lxc.mariadb -auto-approve
 cd ..
 
 echo "=== 2/5 - Demarrage du conteneur ==="
-ssh $PROXMOX "pct start $VMID"
+ssh $PROXMOX "pct start $VMID 2>/dev/null || true"
 sleep 8
 
 echo "=== 3/5 - Reveil du bridge reseau (ping sortant) ==="
 # Le conteneur doit emettre du trafic pour que le bridge apprenne sa MAC
-ssh $PROXMOX "pct exec $VMID -- ping -c 3 $GW"
+until ssh $PROXMOX "pct exec $VMID -- ping -c 2 $GW" >/dev/null 2>&1; do
+  echo "    Reseau pas encore pret, nouvelle tentative..."
+  sleep 5
+done
 
 echo "=== 4/5 - Attente SSH ==="
 ssh-keygen -f /root/.ssh/known_hosts -R $CT_IP 2>/dev/null || true

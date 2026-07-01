@@ -23,11 +23,14 @@ lxc.mount.entry: /dev/null sys/module/apparmor/parameters/enabled none bind,crea
 LXCEOF"
 
 echo "=== 3/6 - Demarrage du conteneur ==="
-ssh $PROXMOX "pct start $VMID"
+ssh $PROXMOX "pct start $VMID 2>/dev/null || true"
 sleep 8
 
 echo "=== 4/6 - Reveil du bridge reseau ==="
-ssh $PROXMOX "pct exec $VMID -- ping -c 3 $GW"
+until ssh $PROXMOX "pct exec $VMID -- ping -c 2 $GW" >/dev/null 2>&1; do
+  echo "    Reseau pas encore pret, nouvelle tentative..."
+  sleep 5
+done
 
 echo "=== 5/6 - Attente SSH ==="
 ssh-keygen -f /root/.ssh/known_hosts -R $CT_IP 2>/dev/null || true

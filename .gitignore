@@ -25,3 +25,4 @@ ansible/zabbix-db.tar.gz
 ansible/dashy.tar.gz
 ansible/portainer-data.tar.gz
 ansible/log-sync-key
+rto-test-*.log
